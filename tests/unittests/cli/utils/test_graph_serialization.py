@@ -14,10 +14,13 @@
 
 """Tests for graph_serialization edge handling with routing maps."""
 
+import json
+
 from google.adk.cli.utils.graph_serialization import serialize_agent
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.workflow import START
 from google.adk.workflow import Workflow
+import pytest
 
 from tests.unittests.workflow.workflow_testing_utils import TestingNode
 
@@ -126,3 +129,46 @@ def test_serialize_agent_with_toolset() -> None:
   assert len(result['tools']) == 1
   assert result['tools'][0]['name'] == 'MockToolset'
   assert result['tools'][0]['type'] == 'tool'
+
+
+def test_serialize_agent_with_non_json_serializable_model_dump() -> None:
+  """A field whose model_dump() embeds a non-JSON-serializable object must
+  not break JSON encoding of the result (e.g. LiteLlm.llm_client)."""
+
+  class NonSerializable:
+    pass
+
+  class FakeModel:
+
+    def model_dump(self, **kwargs):
+      return {'model': 'ollama_chat/llama3', 'client': NonSerializable()}
+
+  class FakeAgent:
+    model_fields = {'model': None}
+
+    def __init__(self):
+      self.model = FakeModel()
+
+  result = serialize_agent(FakeAgent())  # type: ignore
+
+  # Must be JSON-serializable; previously raised TypeError downstream.
+  json.dumps(result)
+  # Serializable fields are preserved; the unserializable one is stringified.
+  assert result['model']['model'] == 'ollama_chat/llama3'
+  assert isinstance(result['model']['client'], str)
+
+
+def test_serialize_agent_with_litellm_model_is_json_serializable() -> None:
+  """Regression for #5949: build_graph 500 on agents using a LiteLlm model."""
+
+  pytest.importorskip('litellm')
+  from google.adk.agents import LlmAgent
+  from google.adk.models.lite_llm import LiteLlm
+
+  agent = LlmAgent(name='repro', model=LiteLlm(model='ollama_chat/llama3'))
+
+  result = serialize_agent(agent)
+
+  # The whole response must JSON-encode (FastAPI does this for build_graph).
+  json.dumps(result)
+  assert result['model']['model'] == 'ollama_chat/llama3'

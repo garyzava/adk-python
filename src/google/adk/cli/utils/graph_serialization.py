@@ -16,6 +16,7 @@ from __future__ import annotations
 
 """Utility functions for serializing agent graphs for the web UI."""
 
+import json
 import logging
 from typing import Any
 
@@ -231,8 +232,16 @@ def serialize_agent(agent: BaseAgent) -> dict[str, Any]:
         elif isinstance(value, (str, int, float, bool, list, dict)):
           agent_dict[field_name] = value
         elif hasattr(value, "model_dump"):
-          agent_dict[field_name] = value.model_dump(
-              mode="python", exclude_none=True
+          # model_dump(mode="python") can embed arbitrary, non-JSON-
+          # serializable objects (e.g. LiteLlm.llm_client), which would later
+          # crash JSON encoding of the build_graph response. Coerce to a
+          # JSON-safe structure, stringifying anything not serializable while
+          # preserving the serializable fields (e.g. the model name).
+          agent_dict[field_name] = json.loads(
+              json.dumps(
+                  value.model_dump(mode="python", exclude_none=True),
+                  default=str,
+              )
           )
         else:
           agent_dict[field_name] = str(value)
